@@ -46,14 +46,14 @@ type Message struct {
 	AttemptedCount uint `json:"attempted_count"`
 }
 
-type builder struct {
+type Retrier struct {
 	config Config
 	sqs    sqsiface.SQSAPI
 }
 
 // New begins polling based on the provided Config
-func New(config Config) builder {
-	b := builder{
+func New(config Config) Retrier {
+	b := Retrier{
 		config: config,
 		sqs: sqs.New(session.New(&aws.Config{
 			Region:      aws.String(config.AWSRegion),
@@ -64,7 +64,7 @@ func New(config Config) builder {
 	return b
 }
 
-func (b builder) Job(id int) error {
+func (r Retrier) Job(id int) error {
 	message := message{
 		Message: Message{
 			ID:             id,
@@ -73,14 +73,14 @@ func (b builder) Job(id int) error {
 		AdditionalDelay: 0,
 	}
 
-	return b.workMessage(message)
+	return r.workMessage(message)
 }
 
 // workMessage handles a message after we've taken it out of SQS
 // (or we create it manually if it's a new job)
-func (b builder) workMessage(message message) error {
+func (r Retrier) workMessage(message message) error {
 	// Compute visiblity timeout and update message to account for backoff
-	message, delay, skip := b.computeMessageDelay(message)
+	message, delay, skip := r.computeMessageDelay(message)
 	fmt.Printf("message: %+v, delay: %d, skip: %v\n", message, delay, skip)
 
 	if !skip {
@@ -89,15 +89,15 @@ func (b builder) workMessage(message message) error {
 		// That would cause a cumulative timing error to build up,
 		// and eventually we would not be even close to on schedule.
 		// We might need to switch to timestamps to keep track.
-		complete := b.config.Handler(message.Message)
+		complete := r.config.Handler(message.Message)
 		if complete {
 			return nil
 		}
 	}
-	return b.sendToQueue(message, delay)
+	return r.sendToQueue(message, delay)
 }
 
-func (b builder) sendToQueue(message message, delay uint) error {
+func (r Retrier) sendToQueue(message message, delay uint) error {
 	body, err := json.Marshal(message)
 	if err != nil {
 		return errors.Wrap(err, "failed to convert Message to JSON")
@@ -105,11 +105,11 @@ func (b builder) sendToQueue(message message, delay uint) error {
 
 	input := &sqs.SendMessageInput{
 		MessageBody:  aws.String(string(body)),
-		QueueUrl:     aws.String(b.config.QueueURL),
+		QueueUrl:     aws.String(r.config.QueueURL),
 		DelaySeconds: aws.Int64(int64(delay)),
 	}
 
-	_, err = b.sqs.SendMessage(input)
+	_, err = r.sqs.SendMessage(input)
 	if err != nil {
 		return errors.Wrap(err, "failed to send job to SQS")
 	}
@@ -117,21 +117,21 @@ func (b builder) sendToQueue(message message, delay uint) error {
 	return nil
 }
 
-func (b builder) poll() {
+func (r Retrier) poll() {
 	for {
-		b.pollOnce()
+		r.pollOnce()
 	}
 }
 
-func (b builder) pollOnce() {
+func (r Retrier) pollOnce() {
 	params := &sqs.ReceiveMessageInput{
-		QueueUrl:        aws.String(b.config.QueueURL),
+		QueueUrl:        aws.String(r.config.QueueURL),
 		WaitTimeSeconds: aws.Int64(10),
 	}
-	output, err := b.sqs.ReceiveMessage(params)
+	output, err := r.sqs.ReceiveMessage(params)
 	if err != nil {
 		err = errors.Wrap(err, "failed to retrieve SQS message")
-		b.config.ErrorHandler(err)
+		r.config.ErrorHandler(err)
 		return
 	}
 	if len(output.Messages) != 1 {
@@ -141,18 +141,18 @@ func (b builder) pollOnce() {
 	fmt.Println("got message")
 	sqsMessage := output.Messages[0]
 	if sqsMessage.Body == nil {
-		b.config.ErrorHandler(errors.New("The message retreived from SQS has no body"))
+		r.config.ErrorHandler(errors.New("The message retreived from SQS has no body"))
 		return
 	}
 	var message message
 	err = json.Unmarshal([]byte(*sqsMessage.Body), &message)
 	if err != nil {
 		err = errors.Wrap(err, "failed to read SQS message as JSON")
-		b.config.ErrorHandler(err)
+		r.config.ErrorHandler(err)
 		return
 	}
 
-	if b.config.MaxAttempts != 0 && int(message.AttemptedCount) >= b.config.MaxAttempts {
+	if r.config.MaxAttempts != 0 && int(message.AttemptedCount) >= r.config.MaxAttempts {
 		// We're just not going to process it which will put it in the DLQ
 		// Maybe just calling the ErrorHandler is better though?
 		fmt.Println("abourting")
@@ -164,29 +164,29 @@ func (b builder) pollOnce() {
 	// Delete the SQS message
 	// Any error that happens prior to this point will put the message in DLQ
 	// Any error after it will not.
-	if _, err := b.deleteMessage(sqsMessage); err != nil {
+	if _, err := r.deleteMessage(sqsMessage); err != nil {
 		err = errors.Wrap(err, "failed to delete SQS message")
-		b.config.ErrorHandler(err)
+		r.config.ErrorHandler(err)
 		return
 	}
 
 	fmt.Printf("message: %+v\n", message)
-	err = b.workMessage(message)
+	err = r.workMessage(message)
 	if err != nil {
-		b.config.ErrorHandler(err)
+		r.config.ErrorHandler(err)
 	}
 }
 
-func (b builder) deleteMessage(message *sqs.Message) (*sqs.DeleteMessageOutput, error) {
+func (r Retrier) deleteMessage(message *sqs.Message) (*sqs.DeleteMessageOutput, error) {
 
 	params := &sqs.DeleteMessageInput{
-		QueueUrl:      aws.String(b.config.QueueURL),
+		QueueUrl:      aws.String(r.config.QueueURL),
 		ReceiptHandle: message.ReceiptHandle,
 	}
-	return b.sqs.DeleteMessage(params)
+	return r.sqs.DeleteMessage(params)
 }
 
-func (b builder) computeMessageDelay(message message) (message, uint, bool) {
+func (r Retrier) computeMessageDelay(message message) (message, uint, bool) {
 	// If the item needs to be delayed more, even though we
 	// aren't yet to the next backoff iteration.
 	// We need this check since we are limited in how much
@@ -205,7 +205,7 @@ func (b builder) computeMessageDelay(message message) (message, uint, bool) {
 
 	// We are actually proceeding to the next iteration of backoff...
 	message.AttemptedCount++
-	delay := b.config.BackoffStrategy(message.AttemptedCount)
+	delay := r.config.BackoffStrategy(message.AttemptedCount)
 	if delay > MaxQueueDelaySeconds {
 		message.AdditionalDelay = delay - MaxQueueDelaySeconds
 		delay = MaxQueueDelaySeconds

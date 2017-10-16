@@ -17,16 +17,16 @@ type testcase struct {
 
 func TestRetry(t *testing.T) {
 	cases := []testcase{
-		// testcase{
-		// 	description:               "execute job immediately",
-		// 	numberOfPolls:             0,
-		// 	succeedOnAttemptNumber:    0,
-		// maxAttempts: 1,
-		// 	expectHandlerInvokedCount: 1,
-		// 	expectSQSReceiveCount:     0,
-		// 	expectSQSSendCount:        0,
-		// 	expectSQSDeleteCount:      0,
-		// },
+		testcase{
+			description:               "execute job immediately",
+			numberOfPolls:             0,
+			succeedOnAttemptNumber:    0,
+			maxAttempts:               1,
+			expectHandlerInvokedCount: 1,
+			expectSQSReceiveCount:     0,
+			expectSQSSendCount:        0,
+			expectSQSDeleteCount:      0,
+		},
 		testcase{
 			description:               "execute job after one delay",
 			numberOfPolls:             1,
@@ -37,6 +37,26 @@ func TestRetry(t *testing.T) {
 			expectSQSSendCount:        1,
 			expectSQSDeleteCount:      1,
 		},
+		testcase{
+			description:               "execute job after many delays",
+			numberOfPolls:             12,
+			succeedOnAttemptNumber:    13,
+			maxAttempts:               13,
+			expectHandlerInvokedCount: 13,
+			expectSQSReceiveCount:     12,
+			expectSQSSendCount:        12,
+			expectSQSDeleteCount:      12,
+		},
+		testcase{
+			description:               "send job to DLQ",
+			numberOfPolls:             4,
+			succeedOnAttemptNumber:    99,
+			maxAttempts:               4,
+			expectHandlerInvokedCount: 4,
+			expectSQSReceiveCount:     4,
+			expectSQSSendCount:        4,
+			expectSQSDeleteCount:      3,
+		},
 	}
 
 	for _, test := range cases {
@@ -44,7 +64,7 @@ func TestRetry(t *testing.T) {
 			SucceedOnAttemptNumber: test.succeedOnAttemptNumber,
 		}
 		mockSQS := NewMockSQS()
-		builder := builder{
+		retrier := Retrier{
 			config: Config{
 				AWSAccessKeyID:  "",
 				AWSSecret:       "",
@@ -60,13 +80,13 @@ func TestRetry(t *testing.T) {
 			sqs: mockSQS,
 		}
 
-		err := builder.Job(0)
+		err := retrier.Job(0)
 		if err != nil {
 			t.Error(err)
 		}
 
 		for i := 0; i < test.numberOfPolls; i++ {
-			builder.pollOnce()
+			retrier.pollOnce()
 		}
 
 		if got, want := mockFunc.InvokedCount, test.expectHandlerInvokedCount; got != want {
