@@ -112,7 +112,9 @@ func (r Retrier) sendToQueue(message message) error {
 		return errors.Wrap(err, "failed to convert Message to JSON")
 	}
 
-	delay := message.NextAttempt.Sub(r.time.Now())
+	// We add an extra second since SQS Delays aren't very precise
+	// Adding a second can prevent unnecessary reads from the Queue
+	delay := message.NextAttempt.Sub(r.time.Now()) + time.Second
 
 	input := &sqs.SendMessageInput{
 		MessageBody:  aws.String(string(body)),
@@ -166,7 +168,8 @@ func (r Retrier) pollOnce() {
 	if r.config.MaxAttempts != 0 && int(message.AttemptedCount) >= r.config.MaxAttempts {
 		// We're just not going to process it which will put it in the DLQ
 		// Maybe just calling the ErrorHandler is better though?
-		fmt.Println("abourting")
+		// If someone doesn't have a DLQ set up, then these messages will exist forever
+		fmt.Printf("abourting: %+v\n", message)
 		return
 	}
 
