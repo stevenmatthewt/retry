@@ -3,6 +3,7 @@ package retry
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -36,9 +37,20 @@ type BackoffFunc func(attempt uint) (delay uint)
 
 type ErrorHandler func(error)
 
+type clock interface {
+	Now() time.Time
+}
+
+type realClock struct{}
+
+func (realClock) Now() time.Time {
+	return time.Now()
+}
+
 type message struct {
 	Message
-	AdditionalDelay uint `json:"accumulated_delay"`
+	ReceivedTime time.Time `json:"received_time"`
+	NextAttempt  time.Time `json:"next_attempt"`
 }
 
 type Message struct {
@@ -47,6 +59,7 @@ type Message struct {
 }
 
 type Retrier struct {
+	time   clock
 	config Config
 	sqs    sqsiface.SQSAPI
 }
@@ -54,6 +67,7 @@ type Retrier struct {
 // New begins polling based on the provided Config
 func New(config Config) Retrier {
 	b := Retrier{
+		time:   realClock{},
 		config: config,
 		sqs: sqs.New(session.New(&aws.Config{
 			Region:      aws.String(config.AWSRegion),
@@ -70,7 +84,8 @@ func (r Retrier) Job(id int) error {
 			ID:             id,
 			AttemptedCount: 0,
 		},
-		AdditionalDelay: 0,
+		ReceivedTime: r.time.Now(),
+		NextAttempt:  r.time.Now(),
 	}
 
 	return r.workMessage(message)
@@ -80,33 +95,29 @@ func (r Retrier) Job(id int) error {
 // (or we create it manually if it's a new job)
 func (r Retrier) workMessage(message message) error {
 	// Compute visiblity timeout and update message to account for backoff
-	message, delay, skip := r.computeMessageDelay(message)
-	fmt.Printf("message: %+v, delay: %d, skip: %v\n", message, delay, skip)
-
+	message, skip := r.computeMessageDelay(message)
 	if !skip {
 		// Perform the action requested for this item
-		// TODO: this could theoretically take a very long time.
-		// That would cause a cumulative timing error to build up,
-		// and eventually we would not be even close to on schedule.
-		// We might need to switch to timestamps to keep track.
 		complete := r.config.Handler(message.Message)
 		if complete {
 			return nil
 		}
 	}
-	return r.sendToQueue(message, delay)
+	return r.sendToQueue(message)
 }
 
-func (r Retrier) sendToQueue(message message, delay uint) error {
+func (r Retrier) sendToQueue(message message) error {
 	body, err := json.Marshal(message)
 	if err != nil {
 		return errors.Wrap(err, "failed to convert Message to JSON")
 	}
 
+	delay := message.NextAttempt.Sub(r.time.Now())
+
 	input := &sqs.SendMessageInput{
 		MessageBody:  aws.String(string(body)),
 		QueueUrl:     aws.String(r.config.QueueURL),
-		DelaySeconds: aws.Int64(int64(delay)),
+		DelaySeconds: aws.Int64(int64(delay.Seconds())),
 	}
 
 	_, err = r.sqs.SendMessage(input)
@@ -186,31 +197,23 @@ func (r Retrier) deleteMessage(message *sqs.Message) (*sqs.DeleteMessageOutput, 
 	return r.sqs.DeleteMessage(params)
 }
 
-func (r Retrier) computeMessageDelay(message message) (message, uint, bool) {
+func (r Retrier) computeMessageDelay(message message) (message, bool) {
 	// If the item needs to be delayed more, even though we
 	// aren't yet to the next backoff iteration.
 	// We need this check since we are limited in how much
 	// we can delay messages in SQS
-	if message.AdditionalDelay != 0 {
-		var delay uint
-		if message.AdditionalDelay > MaxQueueDelaySeconds {
-			message.AdditionalDelay -= MaxQueueDelaySeconds
-			delay = MaxQueueDelaySeconds
-		} else {
-			delay = message.AdditionalDelay
-			message.AdditionalDelay = 0
-		}
-		return message, delay, true
+	fmt.Printf("compute message: %+v current time: %v\n", message, r.time.Now())
+	var additionalDelay = message.NextAttempt.Sub(r.time.Now())
+	if additionalDelay.Seconds() > 0 {
+		fmt.Print("skipping\n")
+		return message, true
 	}
 
 	// We are actually proceeding to the next iteration of backoff...
 	message.AttemptedCount++
 	delay := r.config.BackoffStrategy(message.AttemptedCount)
-	if delay > MaxQueueDelaySeconds {
-		message.AdditionalDelay = delay - MaxQueueDelaySeconds
-		delay = MaxQueueDelaySeconds
-	}
-	return message, delay, false
+	message.NextAttempt = message.NextAttempt.Add(time.Duration(delay) * time.Second)
+	return message, false
 }
 
 // ExponentialBackoff makes an immediate attempt

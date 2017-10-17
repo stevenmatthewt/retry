@@ -63,7 +63,8 @@ func TestRetry(t *testing.T) {
 		mockFunc := &mockFunc{
 			SucceedOnAttemptNumber: test.succeedOnAttemptNumber,
 		}
-		mockSQS := NewMockSQS()
+		clock := &mockClock{}
+		mockSQS := NewMockSQS(clock)
 		retrier := Retrier{
 			config: Config{
 				AWSAccessKeyID:  "",
@@ -77,7 +78,8 @@ func TestRetry(t *testing.T) {
 				},
 				Handler: mockFunc.invoke,
 			},
-			sqs: mockSQS,
+			sqs:  mockSQS,
+			time: clock,
 		}
 
 		err := retrier.Job(0)

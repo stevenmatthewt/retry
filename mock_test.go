@@ -1,6 +1,8 @@
 package retry
 
 import (
+	"time"
+
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/aws/aws-sdk-go/service/sqs/sqsiface"
 )
@@ -18,6 +20,7 @@ func (m *mockFunc) invoke(Message) bool {
 type mockSQS struct {
 	sqsiface.SQSAPI
 	storage                    map[*string]*string
+	clock                      *mockClock
 	ReceiveMessageInvokedCount int
 	// ReceiveMessageFunc         func(*sqs.ReceiveMessageInput) (*sqs.ReceiveMessageOutput, error)
 	SendMessageInvokedCount int
@@ -26,9 +29,10 @@ type mockSQS struct {
 	// DeleteMessageFunc          func(*sqs.DeleteMessageInput) (*sqs.DeleteMessageOutput, error)
 }
 
-func NewMockSQS() *mockSQS {
+func NewMockSQS(clock *mockClock) *mockSQS {
 	return &mockSQS{
 		storage: make(map[*string]*string),
+		clock:   clock,
 	}
 }
 
@@ -52,6 +56,11 @@ func (m *mockSQS) SendMessage(in *sqs.SendMessageInput) (*sqs.SendMessageOutput,
 	m.SendMessageInvokedCount++
 	str := string(m.SendMessageInvokedCount)
 	m.storage[&str] = in.MessageBody
+
+	if in.DelaySeconds != nil {
+		m.clock.time = m.clock.time.Add(time.Duration(*in.DelaySeconds) * time.Second)
+	}
+
 	return &sqs.SendMessageOutput{}, nil
 }
 
@@ -59,4 +68,12 @@ func (m *mockSQS) DeleteMessage(in *sqs.DeleteMessageInput) (*sqs.DeleteMessageO
 	m.DeleteMessageInvokedCount++
 	delete(m.storage, in.ReceiptHandle)
 	return &sqs.DeleteMessageOutput{}, nil
+}
+
+type mockClock struct {
+	time time.Time
+}
+
+func (m mockClock) Now() time.Time {
+	return m.time
 }
