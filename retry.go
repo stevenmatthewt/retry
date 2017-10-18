@@ -2,7 +2,6 @@ package retry
 
 import (
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -151,7 +150,6 @@ func (r Retrier) pollOnce() {
 		return
 	}
 
-	fmt.Println("got message")
 	sqsMessage := output.Messages[0]
 	if sqsMessage.Body == nil {
 		r.config.ErrorHandler(errors.New("The message retreived from SQS has no body"))
@@ -169,11 +167,8 @@ func (r Retrier) pollOnce() {
 		// We're just not going to process it which will put it in the DLQ
 		// Maybe just calling the ErrorHandler is better though?
 		// If someone doesn't have a DLQ set up, then these messages will exist forever
-		fmt.Printf("abourting: %+v\n", message)
 		return
 	}
-
-	fmt.Println("processing message")
 
 	// Delete the SQS message
 	// Any error that happens prior to this point will put the message in DLQ
@@ -184,7 +179,6 @@ func (r Retrier) pollOnce() {
 		return
 	}
 
-	fmt.Printf("message: %+v\n", message)
 	err = r.workMessage(message)
 	if err != nil {
 		r.config.ErrorHandler(err)
@@ -205,10 +199,8 @@ func (r Retrier) computeMessageDelay(message message) (message, bool) {
 	// aren't yet to the next backoff iteration.
 	// We need this check since we are limited in how much
 	// we can delay messages in SQS
-	fmt.Printf("compute message: %+v current time: %v\n", message, r.time.Now())
 	var additionalDelay = message.NextAttempt.Sub(r.time.Now())
 	if additionalDelay.Seconds() > 0 {
-		fmt.Print("skipping\n")
 		return message, true
 	}
 
