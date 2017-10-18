@@ -30,10 +30,6 @@ type Config struct {
 
 type ActionHandler func(Message) (complete bool)
 
-// BackoffFunc is a function that maps the retry attempt
-// to a delay (in seconds)
-type BackoffFunc func(attempt uint) (delay uint)
-
 type ErrorHandler func(error)
 
 type clock interface {
@@ -84,7 +80,7 @@ func (r Retrier) Job(id int) error {
 			AttemptedCount: 0,
 		},
 		ReceivedTime: r.time.Now(),
-		NextAttempt:  r.time.Now(),
+		NextAttempt:  r.time.Now().Add(r.config.BackoffStrategy(0)),
 	}
 
 	return r.workMessage(message)
@@ -209,49 +205,4 @@ func (r Retrier) computeMessageDelay(message message) (message, bool) {
 	delay := r.config.BackoffStrategy(message.AttemptedCount)
 	message.NextAttempt = message.NextAttempt.Add(time.Duration(delay) * time.Second)
 	return message, false
-}
-
-// ExponentialBackoff makes an immediate attempt
-// and then backs off exponentially. I.e:
-//
-// For a seed delay of 5 seconds:
-// Attempt 0 - delay 0 seconds
-// Attempt 1 - delay 5 seconds
-// Attempt 2 - delay 10 seconds
-// Attempt 3 - delay 20 seconds
-func ExponentialBackoff(seedDelay uint) BackoffFunc {
-	return func(attempt uint) uint {
-		if attempt == 0 {
-			return 0
-		}
-		return seedDelay << (attempt - 1)
-	}
-}
-
-// LinearBackoff makes an immediate attempt
-// and then backs off linearly. I.e:
-//
-// For a seed delay of 5 seconds:
-// Attempt 0 - delay 0 seconds
-// Attempt 1 - delay 5 seconds
-// Attempt 2 - delay 10 seconds
-// Attempt 3 - delay 15 seconds
-func LinearBackoff(seedDelay uint) BackoffFunc {
-	return func(attempt uint) uint {
-		return seedDelay * attempt
-	}
-}
-
-// ConstantBackoff makes an immediate attempt
-// and then backs off linearly. I.e:
-//
-// For a seed delay of 5 seconds:
-// Attempt 0 - delay 0 seconds
-// Attempt 1 - delay 5 seconds
-// Attempt 2 - delay 5 seconds
-// Attempt 3 - delay 5 seconds
-func ConstantBackoff(seedDelay uint) BackoffFunc {
-	return func(attempt uint) uint {
-		return seedDelay
-	}
 }
