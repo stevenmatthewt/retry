@@ -166,18 +166,17 @@ func (r Retrier) pollOnce() {
 		return
 	}
 
+	err = r.workMessage(message)
+	if err != nil {
+		r.config.ErrorHandler(err)
+	}
+
 	// Delete the SQS message
-	// Any error that happens prior to this point will put the message in DLQ
-	// Any error after it will not.
+	// Any return that happens prior to this point will put the message in DLQ
 	if _, err := r.deleteMessage(sqsMessage); err != nil {
 		err = errors.Wrap(err, "failed to delete SQS message")
 		r.config.ErrorHandler(err)
 		return
-	}
-
-	err = r.workMessage(message)
-	if err != nil {
-		r.config.ErrorHandler(err)
 	}
 }
 
