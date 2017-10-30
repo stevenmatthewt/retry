@@ -18,7 +18,10 @@ const MaxQueueDelaySeconds = 900
 
 // Config defines parameters used in the polling process
 type Config struct {
-	QueueURL        string
+	QueueURL string
+	// AWS* environment variables are optional.
+	// If they are not provided, default AWS credential
+	// providers will be used.
 	AWSSecret       string
 	AWSAccessKeyID  string
 	AWSRegion       string
@@ -61,12 +64,21 @@ type Retrier struct {
 
 // New begins polling based on the provided Config
 func New(config Config) Retrier {
+	var creds *credentials.Credentials
+	if config.AWSAccessKeyID != "" || config.AWSSecret != "" {
+		creds = credentials.NewStaticCredentials(config.AWSAccessKeyID, config.AWSSecret, "")
+	}
+	var region *string
+	if config.AWSRegion != "" {
+		region = aws.String(config.AWSRegion)
+	}
+
 	b := Retrier{
 		time:   realClock{},
 		config: config,
 		sqs: sqs.New(session.New(&aws.Config{
-			Region:      aws.String(config.AWSRegion),
-			Credentials: credentials.NewStaticCredentials(config.AWSAccessKeyID, config.AWSSecret, ""),
+			Region:      region,
+			Credentials: creds,
 		})),
 	}
 	go b.poll()
