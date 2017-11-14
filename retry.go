@@ -120,6 +120,9 @@ func (r Retrier) sendToQueue(message message) error {
 	}
 
 	delay := message.NextAttempt.Sub(r.time.Now())
+	if delay.Seconds() > MaxQueueDelaySeconds {
+		delay = MaxQueueDelaySeconds * time.Second
+	}
 
 	input := &sqs.SendMessageInput{
 		MessageBody:  aws.String(string(body)),

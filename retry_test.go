@@ -13,6 +13,7 @@ type testcase struct {
 	expectSQSReceiveCount     int
 	expectSQSSendCount        int
 	expectSQSDeleteCount      int
+	backoff                   BackoffFunc
 }
 
 func TestRetry(t *testing.T) {
@@ -26,6 +27,7 @@ func TestRetry(t *testing.T) {
 			expectSQSReceiveCount:     0,
 			expectSQSSendCount:        0,
 			expectSQSDeleteCount:      0,
+			backoff:                   LinearBackoff(4),
 		},
 		testcase{
 			description:               "execute job after one delay",
@@ -36,6 +38,7 @@ func TestRetry(t *testing.T) {
 			expectSQSReceiveCount:     1,
 			expectSQSSendCount:        1,
 			expectSQSDeleteCount:      1,
+			backoff:                   LinearBackoff(4),
 		},
 		testcase{
 			description:               "execute job after many delays",
@@ -46,6 +49,7 @@ func TestRetry(t *testing.T) {
 			expectSQSReceiveCount:     12,
 			expectSQSSendCount:        12,
 			expectSQSDeleteCount:      12,
+			backoff:                   LinearBackoff(4),
 		},
 		testcase{
 			description:               "send job to DLQ",
@@ -56,6 +60,18 @@ func TestRetry(t *testing.T) {
 			expectSQSReceiveCount:     4,
 			expectSQSSendCount:        4,
 			expectSQSDeleteCount:      3,
+			backoff:                   LinearBackoff(4),
+		},
+		testcase{
+			description:               "Delay for greater than maximum",
+			numberOfPolls:             2,
+			succeedOnAttemptNumber:    2,
+			maxAttempts:               2,
+			expectHandlerInvokedCount: 2,
+			expectSQSReceiveCount:     2,
+			expectSQSSendCount:        2,
+			expectSQSDeleteCount:      2,
+			backoff:                   LinearBackoff(1000),
 		},
 	}
 
@@ -71,7 +87,7 @@ func TestRetry(t *testing.T) {
 				AWSSecret:       "",
 				AWSRegion:       "",
 				QueueURL:        "",
-				BackoffStrategy: LinearBackoff(4),
+				BackoffStrategy: test.backoff,
 				MaxAttempts:     test.maxAttempts,
 				ErrorHandler: func(err error) {
 					t.Error(err)
