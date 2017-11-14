@@ -119,9 +119,7 @@ func (r Retrier) sendToQueue(message message) error {
 		return errors.Wrap(err, "failed to convert Message to JSON")
 	}
 
-	// We add an extra second since SQS Delays aren't very precise
-	// Adding a second can prevent unnecessary reads from the Queue
-	delay := message.NextAttempt.Sub(r.time.Now()) + time.Second
+	delay := message.NextAttempt.Sub(r.time.Now())
 
 	input := &sqs.SendMessageInput{
 		MessageBody:  aws.String(string(body)),
@@ -206,8 +204,12 @@ func (r Retrier) computeMessageDelay(message message) (message, bool) {
 	// aren't yet to the next backoff iteration.
 	// We need this check since we are limited in how much
 	// we can delay messages in SQS
+	//
+	// We set our threshold at 5 seconds, not zero.
+	// This prevent extraneous reads from the queue due
+	// to SQS Timing inaccuracies.
 	var additionalDelay = message.NextAttempt.Sub(r.time.Now())
-	if additionalDelay.Seconds() > 0 {
+	if additionalDelay.Seconds() > 5 {
 		return message, true
 	}
 
