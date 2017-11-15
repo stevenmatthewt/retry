@@ -123,7 +123,6 @@ func (r Retrier) sendToQueue(message message) error {
 	if delay.Seconds() > MaxQueueDelaySeconds {
 		delay = MaxQueueDelaySeconds * time.Second
 	}
-
 	input := &sqs.SendMessageInput{
 		MessageBody:  aws.String(string(body)),
 		QueueUrl:     aws.String(r.config.QueueURL),
@@ -219,6 +218,6 @@ func (r Retrier) computeMessageDelay(message message) (message, bool) {
 	// We are actually proceeding to the next iteration of backoff...
 	message.AttemptedCount++
 	delay := r.config.BackoffStrategy(message.AttemptedCount)
-	message.NextAttempt = message.NextAttempt.Add(time.Duration(delay) * time.Second)
+	message.NextAttempt = message.NextAttempt.Add(delay)
 	return message, false
 }

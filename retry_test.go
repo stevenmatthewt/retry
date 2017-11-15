@@ -2,6 +2,7 @@ package retry
 
 import (
 	"testing"
+	"time"
 )
 
 type testcase struct {
@@ -14,6 +15,7 @@ type testcase struct {
 	expectSQSSendCount        int
 	expectSQSDeleteCount      int
 	backoff                   BackoffFunc
+	elapsedTime               time.Duration
 }
 
 func TestRetry(t *testing.T) {
@@ -27,7 +29,8 @@ func TestRetry(t *testing.T) {
 			expectSQSReceiveCount:     0,
 			expectSQSSendCount:        0,
 			expectSQSDeleteCount:      0,
-			backoff:                   LinearBackoff(4),
+			backoff:                   LinearBackoff(time.Second * 4),
+			elapsedTime:               time.Second * 0,
 		},
 		testcase{
 			description:               "execute job after one delay",
@@ -38,7 +41,8 @@ func TestRetry(t *testing.T) {
 			expectSQSReceiveCount:     1,
 			expectSQSSendCount:        1,
 			expectSQSDeleteCount:      1,
-			backoff:                   LinearBackoff(4),
+			backoff:                   LinearBackoff(time.Second * 10),
+			elapsedTime:               time.Second * 10,
 		},
 		testcase{
 			description:               "execute job after many delays",
@@ -49,7 +53,8 @@ func TestRetry(t *testing.T) {
 			expectSQSReceiveCount:     12,
 			expectSQSSendCount:        12,
 			expectSQSDeleteCount:      12,
-			backoff:                   LinearBackoff(4),
+			backoff:                   LinearBackoff(time.Second * 4),
+			elapsedTime:               time.Minute*5 + time.Second*12,
 		},
 		testcase{
 			description:               "send job to DLQ",
@@ -60,7 +65,8 @@ func TestRetry(t *testing.T) {
 			expectSQSReceiveCount:     4,
 			expectSQSSendCount:        4,
 			expectSQSDeleteCount:      3,
-			backoff:                   LinearBackoff(4),
+			backoff:                   LinearBackoff(time.Second * 4),
+			elapsedTime:               time.Second * 40,
 		},
 		testcase{
 			description:               "Delay for greater than maximum",
@@ -71,7 +77,25 @@ func TestRetry(t *testing.T) {
 			expectSQSReceiveCount:     2,
 			expectSQSSendCount:        2,
 			expectSQSDeleteCount:      2,
-			backoff:                   LinearBackoff(1000),
+			backoff:                   LinearBackoff(time.Second * 1000),
+			elapsedTime:               time.Second * 1000,
+		},
+		testcase{
+			description:               "Delay for one hour",
+			numberOfPolls:             4,
+			succeedOnAttemptNumber:    2,
+			maxAttempts:               2,
+			expectHandlerInvokedCount: 2,
+			expectSQSReceiveCount:     4,
+			expectSQSSendCount:        4,
+			expectSQSDeleteCount:      4,
+			backoff: func(attempt uint) time.Duration {
+				if attempt == 0 {
+					return 0
+				}
+				return time.Hour
+			},
+			elapsedTime: time.Hour,
 		},
 	}
 
@@ -98,6 +122,7 @@ func TestRetry(t *testing.T) {
 			time: clock,
 		}
 
+		startTime := mockSQS.clock.Now()
 		err := retrier.Job(0)
 		if err != nil {
 			t.Error(err)
@@ -118,6 +143,9 @@ func TestRetry(t *testing.T) {
 		}
 		if got, want := mockSQS.DeleteMessageInvokedCount, test.expectSQSDeleteCount; got != want {
 			t.Errorf("SQS DeleteMessage invoked incorrect number of times, expected=%d actual=%d", want, got)
+		}
+		if got, want := mockSQS.clock.Now().Sub(startTime), test.elapsedTime; got != want {
+			t.Errorf("Incorrect time elapsed, expected=%v actual=%v", want, got)
 		}
 
 		if t.Failed() {
