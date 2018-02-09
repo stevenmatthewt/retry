@@ -52,8 +52,8 @@ type message struct {
 }
 
 type Message struct {
-	ID             int  `json:"id"`
-	AttemptedCount uint `json:"attempted_count"`
+	ID             int64 `json:"id"`
+	AttemptedCount uint  `json:"attempted_count"`
 }
 
 type Retrier struct {
@@ -85,7 +85,7 @@ func New(config Config) Retrier {
 	return b
 }
 
-func (r Retrier) Job(id int) error {
+func (r Retrier) Job(id int64) error {
 	message := message{
 		Message: Message{
 			ID:             id,
